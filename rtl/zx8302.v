@@ -250,36 +250,21 @@ end
 // ---------------------------------------------------------------------------------
 // ----------------------------------- microdrive ----------------------------------
 // ---------------------------------------------------------------------------------
+//
+// QL4M65: removed the "mdv mdv (...)" instance for milestone 1 (microdrive
+// is milestone 3, not implemented yet). mdv.v itself instantiates "dpram"
+// (the Quartus-specific altsyncram wrapper - see doc/m2m/exceptions.md),
+// which would otherwise get pulled into the Vivado build transitively even
+// though microdrive support isn't used. Tied to a "no drive present" state
+// instead - re-instantiate mdv (and give it a Vivado-clean dpram, same
+// treatment ql_rom/vram already got) when milestone 3 is implemented.
 
-wire mdv_gap;
-wire mdv_tx_empty;
-wire mdv_rx_ready;
-wire [7:0] mdv_byte;
+wire mdv_gap      = 1'b0;
+wire mdv_tx_empty = 1'b1;
+wire mdv_rx_ready = 1'b0;
+wire [7:0] mdv_byte = 8'h00;
 
 assign led = mdv_sel[0];
-
-mdv mdv
-(
-   .clk      ( clk          ),
-   .ce       ( cep          ),
-
-	.reset    ( reset_mdv    ),
-
-	.sel      ( mdv_sel[0]   ),
-
-	.reverse  ( mdv_reverse  ),
-
-   // control bits	
-	.gap      ( mdv_gap      ),
-	.tx_empty ( mdv_tx_empty ),
-	.rx_ready ( mdv_rx_ready ),
-	.dout     ( mdv_byte     ),
-
-	.download ( mdv_download ),
-	.dl_addr  ( mdv_dl_addr  ),
-	.dl_data  ( mdv_dl_data  ),
-	.dl_wr    ( mdv_dl_wr    )
-);
 
 // the microdrive control register mctrl generates the drive selection
 reg [7:0] mdv_sel;
