@@ -17,8 +17,24 @@
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
 // GNU General Public License for more details.
 // 
-// You should have received a copy of the GNU General Public License 
-// along with this program.  If not, see <http://www.gnu.org/licenses/>. 
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
+
+//
+// QL4M65 port done by Jose Daniel Fernandez Santos (dfsantos) in 2026 and
+// licensed under GPL v3
+//
+// Removed the embedded "ipc" instance (the emulated Intel 8049 IPC
+// microcontroller + its keyboard.v/T48 dependents) and exposed its
+// comdata/comctrl/audio/ipl signals as top-level ports instead, so that
+// MiSTer2MEGA65's own keyboard.vhd (which speaks the comdata/comctrl
+// protocol directly, without emulating the 8049) can sit as a sibling
+// instance in main.vhd rather than a child of this module. js0/js1/ps2_key
+// (only used by the removed ipc's internal keyboard.v for PS/2 and
+// joystick-as-keys input) are removed for the same reason - M2M's keyboard
+// interface is wired through the new ipc_* ports instead. See
+// doc/m2m/exceptions.md for the full list of what changed and why.
 //
 
 module zx8302
@@ -45,11 +61,14 @@ module zx8302
 		// vertical synv 
 		input          vs,
 
-		// joysticks
-		input [4:0]    js0,
-		input [4:0]    js1,
-		
-		input [10:0]   ps2_key,
+		// IPC link (QL4M65: was the embedded "ipc" instance, now expects an
+		// external IPC - see MiSTer2MEGA65's keyboard.vhd, instantiated as a
+		// sibling in main.vhd)
+		input          ipc_comctrl_i,   // strobe FROM the external IPC
+		output         ipc_comdata_o,   // this chip's own outgoing bit, TO the external IPC
+		input          ipc_comdata_i,   // the external IPC's outgoing bit, FROM the external IPC
+		input  [1:0]   ipc_ipl_i,       // interrupt-priority lines FROM the external IPC
+		input          ipc_audio_i,     // audio bit FROM the external IPC
 
       // bus interface
 		input				cep,
@@ -129,12 +148,12 @@ always @(posedge clk) begin
 			end
 		end
 	end
-	if (!ipc_comctrl && prev_ipc_comctrl) begin
+	if (!ipc_comctrl_i && prev_ipc_comctrl) begin
 		comdata_to_cpu <= zx8302_comdata_in;	// Latch COMDATA since the IPC will quickly reset it to 1 when sending data
 		comdata_reg <= { 1'b1, comdata_reg[3:1] };
 		ipc_busy <= { 1'b0, ipc_busy[1] };
 	end
-	prev_ipc_comctrl <= ipc_comctrl;
+	prev_ipc_comctrl <= ipc_comctrl_i;
 end
 
 // ---------------------------------------------------------------------------------
@@ -166,37 +185,20 @@ assign cpu_dout =
 	16'h0000;	
 
 // ---------------------------------------------------------------------------------
-// -------------------------------------- IPC --------------------------------------
+// ------------------------------ IPC (external) ------------------------------------
 // ---------------------------------------------------------------------------------
-	
-wire ipc_comctrl;
-wire ipc_comdata_out;
+//
+// QL4M65: the 8049 IPC used to be instantiated right here (see header note).
+// This chip's own outgoing comdata bit is exposed on ipc_comdata_o; the
+// external IPC's outgoing bit, strobe and interrupt-priority lines come in
+// on ipc_comdata_i/ipc_comctrl_i/ipc_ipl_i; audio is now an input too.
 
+assign ipc_comdata_o = ipc_comdata_in;
 
-// 8302 sees its own comdata as well as the one from the ipc
-wire zx8302_comdata_in = ipc_comdata_in && ipc_comdata_out;
+// 8302 sees its own comdata as well as the one from the external IPC
+wire zx8302_comdata_in = ipc_comdata_in && ipc_comdata_i;
 
-
-
-wire [1:0] ipc_ipl;
-
-ipc ipc (	
-	.reset    	    ( reset          ),
-	.clk				 ( clk            ),
-	.ce_11m         ( ce_11m         ),
-
-	.comctrl        ( ipc_comctrl    ),
-	.comdata_in     ( ipc_comdata_in ),
-	.comdata_out    ( ipc_comdata_out),
-
-   .audio          ( audio          ),
-	.ipl            ( ipc_ipl        ),
-
-	.js0            ( js0            ),
-	.js1            ( js1            ),
-	
-	.ps2_key        ( ps2_key        )
-);
+assign audio = ipc_audio_i;
 
 // ---------------------------------------------------------------------------------
 // -------------------------------------- IRQs -------------------------------------
@@ -207,7 +209,7 @@ reg [2:0] irq_mask;
 reg [4:0] irq_ack;
 
 // any pending irq raises ipl to 2 and the ipc can control both ipl lines
-assign ipl = { ipc_ipl[1] && (irq_pending[4:0] == 0), ipc_ipl[0] };
+assign ipl = { ipc_ipl_i[1] && (irq_pending[4:0] == 0), ipc_ipl_i[0] };
 
 // vsync irq is set whenever vsync rises
 reg vsync_irq;
