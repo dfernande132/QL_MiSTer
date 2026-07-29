@@ -209,7 +209,21 @@ reg [2:0] irq_mask;
 reg [4:0] irq_ack;
 
 // any pending irq raises ipl to 2 and the ipc can control both ipl lines
-assign ipl = { ipc_ipl_i[1] && (irq_pending[4:0] == 0), ipc_ipl_i[0] };
+//
+// QL4M65: as written, this ANDs ipc_ipl_i[1] with "no irq pending" - the
+// exact opposite of the comment above it. With the real embedded ipc (now
+// removed, see file header), ipc_ipl_i[1] apparently defaulted high whenever
+// the ipc itself had nothing else to report, so this line acted as a
+// defensive clamp. Our external stand-in (keyboard.vhd) permanently drives
+// ipc_ipl_i to "00" (it never implements the ipc's real serial poll-and-relay
+// protocol for zx8302's own interrupts - only its own keyboard commands 8/9)
+// - so with the AND, this line silenced ipl[1] unconditionally, including
+// zx8302's own vsync_irq (the ~50Hz frame interrupt Minerva/QDOS's scheduler
+// depends on) - the leading suspect for the reproducible post-RAM-test hang
+// seen in M1001-M1005 hardware tests. Changed to OR + not-equal so any
+// zx8302-internal pending irq (xint/vsync/gap) can raise ipl[1] on its own,
+// independent of the external ipc - matching the comment's literal intent.
+assign ipl = { ipc_ipl_i[1] || (irq_pending[4:0] != 0), ipc_ipl_i[0] };
 
 // vsync irq is set whenever vsync rises
 reg vsync_irq;
