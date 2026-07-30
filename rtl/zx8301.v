@@ -24,12 +24,6 @@
 // QL4M65 port done by Jose Daniel Fernandez Santos (dfsantos) in 2026 and
 // licensed under GPL v3
 //
-// TEMPORARY DEBUG AID (M1007): exposed the internal h_cnt/v_cnt pixel
-// counters as top-level outputs so main.vhd can composite a small on-screen
-// hex readout of the CPU's address bus, to find exactly where boot hangs
-// (see doc/m2m/exceptions.md). Remove h_cnt_o/v_cnt_o and this note once the
-// hang is diagnosed and the overlay is deleted.
-//
 
 module zx8301
 (
@@ -55,15 +49,8 @@ module zx8301
    output reg hs,
    output reg vs,
 	output reg HBlank,
-	output reg VBlank,
-
-	// QL4M65 TEMPORARY DEBUG AID (M1007, see header note above)
-	output [9:0] h_cnt_o,
-	output [9:0] v_cnt_o
+	output reg VBlank
 );
-
-assign h_cnt_o = h_cnt;
-assign v_cnt_o = v_cnt;
 
 /* ----------------------------------------------------------------- */
 /* -------------------------- CPU register ------------------------- */
