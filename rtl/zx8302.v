@@ -223,7 +223,17 @@ reg [4:0] irq_ack;
 // seen in M1001-M1005 hardware tests. Changed to OR + not-equal so any
 // zx8302-internal pending irq (xint/vsync/gap) can raise ipl[1] on its own,
 // independent of the external ipc - matching the comment's literal intent.
-assign ipl = { ipc_ipl_i[1] || (irq_pending[4:0] != 0), ipc_ipl_i[0] };
+// QL4M65 TEMPORARY TEST (M1012): reverted to the original AND (vsync_irq
+// blocked again) to get an exact, quantitative comparison of the address-
+// change-rate debug counter (main.vhd) with vs without this interrupt
+// reaching the CPU - M1011 showed ~832K bus transactions/sec and the first
+// interrupt-acknowledge within under 1 second of reset, raising the
+// question of whether Minerva's vsync handler itself is doing something
+// expensive on every one of its ~50 passes/sec. Revert to the OR fix below
+// once this comparison is done - the OR is the architecturally correct one
+// (matches the comment's literal intent, see M1006 in DECISIONES.md).
+assign ipl = { ipc_ipl_i[1] && (irq_pending[4:0] == 0), ipc_ipl_i[0] };
+// assign ipl = { ipc_ipl_i[1] || (irq_pending[4:0] != 0), ipc_ipl_i[0] };  -- M1006 fix, temporarily reverted for M1012
 
 // vsync irq is set whenever vsync rises
 reg vsync_irq;
