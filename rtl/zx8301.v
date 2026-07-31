@@ -24,6 +24,13 @@
 // QL4M65 port done by Jose Daniel Fernandez Santos (dfsantos) in 2026 and
 // licensed under GPL v3
 //
+// TEMPORARY DEBUG AID (M1016): re-exposes h_cnt/v_cnt as top-level outputs
+// (previously added for M1007, removed in M1015) so main.vhd can composite
+// a small on-screen hex readout of the CPU's address bus again - this time
+// to diagnose why Minerva/mge stall right after the splash logo instead of
+// showing the F1/F2 info screen, independent of keyboard.vhd's own IPC
+// protocol (see doc/m2m/exceptions.md, DECISIONES.md).
+//
 
 module zx8301
 (
@@ -49,8 +56,15 @@ module zx8301
    output reg hs,
    output reg vs,
 	output reg HBlank,
-	output reg VBlank
+	output reg VBlank,
+
+	// QL4M65 TEMPORARY DEBUG AID (M1016, see header note above)
+	output [9:0] h_cnt_o,
+	output [9:0] v_cnt_o
 );
+
+assign h_cnt_o = h_cnt;
+assign v_cnt_o = v_cnt;
 
 /* ----------------------------------------------------------------- */
 /* -------------------------- CPU register ------------------------- */
