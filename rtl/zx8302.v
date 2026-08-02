@@ -28,13 +28,14 @@
 // Removed the embedded "ipc" instance (the emulated Intel 8049 IPC
 // microcontroller + its keyboard.v/T48 dependents) and exposed its
 // comdata/comctrl/audio/ipl signals as top-level ports instead, so that
-// MiSTer2MEGA65's own keyboard.vhd (which speaks the comdata/comctrl
-// protocol directly, without emulating the 8049) can sit as a sibling
-// instance in main.vhd rather than a child of this module. js0/js1/ps2_key
-// (only used by the removed ipc's internal keyboard.v for PS/2 and
-// joystick-as-keys input) are removed for the same reason - M2M's keyboard
-// interface is wired through the new ipc_* ports instead. See
-// doc/m2m/exceptions.md for the full list of what changed and why.
+// MiSTer2MEGA65's own IPC (CORE/vhdl/ipc.vhd - a straight structural port
+// of rtl/ipc.v, instantiating the real T48 core as a sibling instance in
+// main.vhd instead of a child of this module) can plug in the same way.
+// js0/js1/ps2_key (only used by the removed ipc's internal keyboard.v for
+// PS/2 and joystick-as-keys input) are removed for the same reason - M2M's
+// keyboard interface (CORE/vhdl/keyboard.vhd) feeds ipc.vhd directly
+// instead. See doc/m2m/exceptions.md for the full list of what changed and
+// why.
 //
 
 module zx8302
@@ -110,7 +111,19 @@ reg [7:0] mctrl;
 
 always @(posedge clk) begin
 	if (reset) begin
-		comdata_reg <= 4'b0000;
+		// QL4M65 (M1033): was 4'b0000 (comdata_reg[0]=0, i.e. the ipc_comdata_o
+		// line reads DRIVEN/LOW immediately after reset) - changed to idle-high
+		// (4'b1111), the electrically correct state for a wired-AND bus with
+		// nobody actively driving it low. With the real emulated 8049 (M1031,
+		// ipc.vhd), the real firmware's own "wait for line idle" receive loop
+		// (rtl/ipc8049.hex disassembly, Anexo B.5 of DECISIONES.md: "espera
+		// linea a 0" before each nibble receive) reads this line as "the CPU
+		// wants to talk RIGHT NOW" the instant it starts polling - if it never
+		// naturally settles to idle-high, the firmware can end up perpetually
+		// re-triggering a phantom receive against reset garbage instead of
+		// ever cleanly waiting for a REAL CPU-initiated transfer. See
+		// DECISIONES.md for the full M1031/M1032/M1033 investigation.
+		comdata_reg <= 4'b1111;
 		ipc_busy <= 2'b11;
 	end
 	else if(cen) begin
@@ -204,32 +217,52 @@ assign audio = ipc_audio_i;
 // -------------------------------------- IRQs -------------------------------------
 // ---------------------------------------------------------------------------------
 
-wire [7:0] irq_pending = {1'b0, (mdv_sel == 0), rtc[0], xint_irq, vsync_irq, 1'b0, 1'b0, gap_irq };
+// QL4M65 (M1038): bit1 = "interface" (pc.intri on real hardware - "happens
+// whenever data transfer goes on between CPU and IPC", per inc/pc in
+// Minerva's own source). Never implemented before (hardcoded 0 since the
+// very first zx8302.v port) - found missing while chasing why real
+// SuperBASIC's own keyboard-read code never gets unblocked (M1036/M1037):
+// it busy-waits on a flag that only an interrupt can clear, right after
+// calling a routine that ends with the exact same "write to pc_intr to
+// acknowledge talking to the IPC" pattern mt_ipcom uses everywhere else -
+// but nothing was ever raising this specific interrupt for it to
+// acknowledge. Approximated as: fires once a real comdata/comctrl exchange
+// with the external IPC completes (ipc_busy transitions to idle). Unlike
+// the external ipc_ipl_i (which can get stuck - see the ipl comment below),
+// this is a zx8302-internal, self-contained flag cleared the normal way via
+// irq_ack[1] (bit already reserved in the 5-bit ack register, unused until
+// now) - Minerva's own mt_ipcom already does this unconditionally after
+// every IPC exchange, so it can never get stuck the way M1031-M1034's raw
+// ipl[1] did.
+reg intri_irq;
+wire intri_irq_reset = reset || irq_ack[1];
+always @(posedge clk) begin
+	reg old_ipc_busy;
+
+	old_ipc_busy <= |ipc_busy;
+	if(intri_irq_reset)                     intri_irq <= 1'b0;
+	else if(old_ipc_busy && !(|ipc_busy))   intri_irq <= 1'b1;
+end
+
+wire [7:0] irq_pending = {1'b0, (mdv_sel == 0), rtc[0], xint_irq, vsync_irq, 1'b0, intri_irq, gap_irq };
 reg [2:0] irq_mask;
 reg [4:0] irq_ack;
 
 // any pending irq raises ipl to 2 and the ipc can control both ipl lines
 //
-// QL4M65: as written, this ANDs ipc_ipl_i[1] with "no irq pending" - the
-// exact opposite of the comment above it. With the real embedded ipc (now
-// removed, see file header), ipc_ipl_i[1] apparently defaulted high whenever
-// the ipc itself had nothing else to report, so this line acted as a
-// defensive clamp. Our external stand-in (keyboard.vhd) permanently drives
-// ipc_ipl_i to "00" (it never implements the ipc's real serial poll-and-relay
-// protocol for zx8302's own interrupts - only its own keyboard commands 8/9)
-// - so with the AND, this line silenced ipl[1] unconditionally, including
-// zx8302's own vsync_irq (the ~50Hz frame interrupt Minerva/QDOS's scheduler
-// depends on) - the leading suspect for the reproducible post-RAM-test hang
-// seen in M1001-M1005 hardware tests. Changed to OR + not-equal so any
-// zx8302-internal pending irq (xint/vsync/gap) can raise ipl[1] on its own,
-// independent of the external ipc - matching the comment's literal intent.
-// QL4M65 M1012 A/B TEST (concluded): temporarily reverted to the original
-// AND (vsync_irq blocked) to compare the address-change-rate debug counter
-// (main.vhd) with vs without this interrupt reaching the CPU. Result: no
-// measurable difference (~832K bus transactions/sec either way) - this
-// rules out Minerva's vsync handler as the cause of the extreme slowdown
-// under investigation. Reverted back to the OR fix, which remains the
-// architecturally correct one (matches the comment's literal intent).
+// QL4M65: OR, not AND - any zx8302-internal pending irq (xint/vsync/gap/
+// intri) can raise ipl[1] on its own, independent of the external ipc.
+// This matters because vsync_irq (the ~50Hz tick the whole QDOS scheduler
+// depends on) MUST be able to reach the CPU regardless of what the
+// external ipc's own ipl_i line is doing - AND was tried twice (this
+// project's very first hang, M1001-M1005, and again in M1036 with the real
+// 8049 wired in) and both times it silenced vsync_irq whenever ipc_ipl_i
+// happened to be low (i.e. almost always), freezing the whole system.
+// main.vhd currently ties ipc_ipl_i to "00" (see its own comment) because
+// the real 8049 can assert ipl_i[1] without ever having it cleared again -
+// with that permanently unconnected, this OR effectively just passes
+// through zx8302's own internal irq_pending. See DECISIONES.md's M1006/
+// M1031-M1037 sections for the full investigation.
 assign ipl = { ipc_ipl_i[1] || (irq_pending[4:0] != 0), ipc_ipl_i[0] };
 
 // vsync irq is set whenever vsync rises
@@ -280,7 +313,6 @@ end
 // instead - re-instantiate mdv (and give it a Vivado-clean dpram, same
 // treatment ql_rom/vram already got) when milestone 3 is implemented.
 
-wire mdv_gap      = 1'b0;
 wire mdv_tx_empty = 1'b1;
 wire mdv_rx_ready = 1'b0;
 wire [7:0] mdv_byte = 8'h00;
@@ -291,10 +323,57 @@ assign led = mdv_sel[0];
 reg [7:0] mdv_sel;
 always @(posedge clk) begin
 	reg old_mctrl;
-	
+
 	old_mctrl <= mctrl[1];
 	if(old_mctrl & ~mctrl[1]) mdv_sel <= { mdv_sel[6:0], mctrl[0] };
 end
+
+// QL4M65 (M1040): mdv_gap was hardcoded 1'b0 ("no drive present") since the
+// project began - milestone 3 (microdrive) was never implemented, so this
+// seemed harmless. It is NOT harmless: found while chasing why real
+// SuperBASIC (any ROM - Minerva, MGE, all tested) never responds to the
+// keyboard after boot. Minerva's own sb/start.asm looks for a boot file on
+// mdv1_ right after the F1-F4 screen resolves, via dd/mdvop.asm's
+// "wait: tst.b md_estat(a2); bgt.s wait" - and md_estat can ONLY ever be
+// set (to success or, in our no-medium case, error -1) by md_serve
+// (md/serve.asm), which is ONLY ever invoked by a genuine gap interrupt
+// (ss_int2.asm's gpint branch). With mdv_gap permanently low, that
+// interrupt never fires even once, so md_serve/md_sectr never run, and the
+// wait never ends - md_estat is simply never touched again after dd_mdvop
+// sets it to 1. Confirmed byte-for-byte against a real disassembly of our
+// own ROM: the busy-wait sits at offset $23 from its base register, exactly
+// md_estat's real offset in inc/md's physical definition block.
+//
+// The fix does NOT need real microdrive hardware: QDOS's own downstream
+// code (md/endgp.asm's two polling loops, md_sectr's "not a sector header"/
+// "unreadable" paths) already has generous ~0.5s software timeouts of its
+// own and converges cleanly to "no medium found" on its own once it's
+// actually invoked - the only missing piece is a single gap interrupt to
+// start that chain. Generate a slow, periodic gap pulse whenever any
+// microdrive is selected (mdv_sel!=0) - approximates "motor spinning, no
+// cartridge" without needing a real microdrive data channel; exact timing
+// doesn't matter given QDOS's own generous timeouts on the far end.
+reg [20:0] mdv_gap_cnt;
+reg        mdv_gap_r;
+always @(posedge clk) begin
+	if (reset || mdv_sel == 0) begin
+		mdv_gap_cnt <= 21'd0;
+		mdv_gap_r   <= 1'b0;
+	end
+	else if (ce_131k) begin
+		if (mdv_gap_cnt == 21'd16384) begin  // ~125ms @ 131.25kHz ce_131k
+			mdv_gap_cnt <= 21'd0;
+			mdv_gap_r   <= 1'b1;              // one-cycle (at ce_131k rate) pulse
+		end
+		else begin
+			mdv_gap_cnt <= mdv_gap_cnt + 21'd1;
+			mdv_gap_r   <= 1'b0;
+		end
+	end
+	else
+		mdv_gap_r <= 1'b0;
+end
+wire mdv_gap = mdv_gap_r;
 
 // ---------------------------------------------------------------------------------
 // -------------------------------------- RTC --------------------------------------
