@@ -50,21 +50,7 @@ module sd_card #(parameter WIDE = 0, OCTAL=0)
 	input             ss,
 	input             sck,
 	input      [SW:0] mosi,
-	output reg [SW:0] miso,
-
-	// QL4M65: sdbuf's original Quartus altsyncram doesn't synthesize in
-	// Vivado - the RAM primitive is instantiated externally (main.vhd,
-	// dualport_2clk_ram) instead, same surgical pattern already used for
-	// zx8302.v's ipc/mdv removal. See doc/m2m/exceptions.md.
-	output     [10:0] ram_a_addr_o,
-	output      [7:0] ram_a_data_o,
-	output            ram_a_wren_o,
-	input       [7:0] ram_a_q_i,
-
-	output     [10:0] ram_b_addr_o,
-	output      [7:0] ram_b_data_o,
-	output            ram_b_wren_o,
-	input       [7:0] ram_b_q_i
+	output reg [SW:0] miso
 );
 
 localparam AW = WIDE  ?  7 : 8;
@@ -99,22 +85,60 @@ localparam PREF_STATE_IDLE     = 0;
 localparam PREF_STATE_RD       = 1;
 localparam PREF_STATE_FINISH   = 2;
 
-// QL4M65: original altsyncram "sdbuf" instance removed (Quartus-only
-// primitive, doesn't synthesize in Vivado) - replaced by the ram_a_*/
-// ram_b_* ports above, driven externally by a dualport_2clk_ram sibling
-// instance in main.vhd. Requires WIDE(0) at instantiation so both sides
-// are genuinely 8 bits wide (numwords=2048, widthad=11 on both sides,
-// matching AW+3=11 when AW=8) - see .research/qlsd-design.md. Address/
-// data/write-enable composition below is unchanged from the original.
-assign ram_a_addr_o = {sd_buf,sd_buff_addr};
-assign ram_a_data_o = sd_buff_dout;
-assign ram_a_wren_o = sd_ack & sd_buff_wr;
-assign sd_buff_din  = ram_a_q_i;
+altsyncram sdbuf
+(
+	.clock0    (clk_sys),
+	.address_a ({sd_buf,sd_buff_addr}),
+	.data_a    (sd_buff_dout),
+	.wren_a    (sd_ack & sd_buff_wr),
+	.q_a       (sd_buff_din),
 
-assign ram_b_addr_o = {spi_buf,buffer_ptr};
-assign ram_b_data_o = buffer_din;
-assign ram_b_wren_o = buffer_wr;
-assign buffer_dout  = ram_b_q_i;
+	.clock1    (clk_spi),
+	.address_b ({spi_buf,buffer_ptr}),
+	.data_b    (buffer_din),
+	.wren_b    (buffer_wr),
+	.q_b       (buffer_dout),
+
+	.aclr0(1'b0),
+	.aclr1(1'b0),
+	.addressstall_a(1'b0),
+	.addressstall_b(1'b0),
+	.byteena_a(1'b1),
+	.byteena_b(1'b1),
+	.clocken0(1'b1),
+	.clocken1(1'b1),
+	.clocken2(1'b1),
+	.clocken3(1'b1),
+	.eccstatus(),
+	.rden_a(1'b1),
+	.rden_b(1'b1)
+);
+defparam
+	sdbuf.numwords_a = 1<<(AW+3),
+	sdbuf.widthad_a  = AW+3,
+	sdbuf.width_a    = DW+1,
+	sdbuf.numwords_b = 2048,
+	sdbuf.widthad_b  = 11,
+	sdbuf.width_b    = 8,
+	sdbuf.address_reg_b = "CLOCK1",
+	sdbuf.clock_enable_input_a = "BYPASS",
+	sdbuf.clock_enable_input_b = "BYPASS",
+	sdbuf.clock_enable_output_a = "BYPASS",
+	sdbuf.clock_enable_output_b = "BYPASS",
+	sdbuf.indata_reg_b = "CLOCK1",
+	sdbuf.intended_device_family = "Cyclone V",
+	sdbuf.lpm_type = "altsyncram",
+	sdbuf.operation_mode = "BIDIR_DUAL_PORT",
+	sdbuf.outdata_aclr_a = "NONE",
+	sdbuf.outdata_aclr_b = "NONE",
+	sdbuf.outdata_reg_a = "UNREGISTERED",
+	sdbuf.outdata_reg_b = "UNREGISTERED",
+	sdbuf.power_up_uninitialized = "FALSE",
+	sdbuf.read_during_write_mode_port_a = "NEW_DATA_NO_NBE_READ",
+	sdbuf.read_during_write_mode_port_b = "NEW_DATA_NO_NBE_READ",
+	sdbuf.width_byteena_a = 1,
+	sdbuf.width_byteena_b = 1,
+	sdbuf.wrcontrol_wraddress_reg_b = "CLOCK1";
 
 reg [26:0] csd_size;
 reg        csd_sdhc;
