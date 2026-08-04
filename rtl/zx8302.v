@@ -58,6 +58,22 @@ module zx8302
 		input          mdv_reverse,
 		output         led,
 		output         audio,
+
+		// QL4M65 (Milestone 2 phase A): external mdv1 sibling instance (see
+		// main.vhd) - mdv_dl_addr/mdv_dl_data/mdv_download/mdv_dl_wr above are
+		// unused leftovers from the original design (never referenced inside
+		// this module even before our own port; the loader in main.vhd drives
+		// the external mdv instance's own dl_* ports directly instead). This
+		// chip's own mdv_sel register is exposed so main.vhd can select which
+		// physical drive (if any) is backing the currently-selected number;
+		// mdv1_*_i are drive 1's real outputs, muxed in below in place of the
+		// "no drive present" placeholders whenever mdv_sel[0] is set. See
+		// doc/m2m/exceptions.md.
+		output [7:0]   mdv_sel_o,
+		input          mdv1_gap_i,
+		input          mdv1_tx_empty_i,
+		input          mdv1_rx_ready_i,
+		input  [7:0]   mdv1_byte_i,
 		
 		// vertical synv 
 		input          vs,
@@ -305,19 +321,23 @@ end
 // ----------------------------------- microdrive ----------------------------------
 // ---------------------------------------------------------------------------------
 //
-// QL4M65: removed the "mdv mdv (...)" instance for milestone 1 (microdrive
-// is milestone 3, not implemented yet). mdv.v itself instantiates "dpram"
-// (the Quartus-specific altsyncram wrapper - see doc/m2m/exceptions.md),
-// which would otherwise get pulled into the Vivado build transitively even
-// though microdrive support isn't used. Tied to a "no drive present" state
-// instead - re-instantiate mdv (and give it a Vivado-clean dpram, same
-// treatment ql_rom/vram already got) when milestone 3 is implemented.
+// QL4M65 (Milestone 2 phase A): "mdv mdv (...)" was removed for milestone 1
+// (microdrive wasn't implemented yet at the time) since mdv.v itself
+// instantiates "dpram" (the Quartus-specific altsyncram wrapper - see
+// doc/m2m/exceptions.md), which would otherwise get pulled into the Vivado
+// build transitively even when unused. Now that a real mdv1 sibling exists
+// (main.vhd, with a Vivado-clean dpram replacement), mdv_tx_empty/
+// mdv_rx_ready/mdv_byte are muxed: mdv1's real outputs when mdv_sel[0] is
+// set (drive 1 selected), the original "no drive present" placeholder
+// otherwise (mdv_sel==0, or mdv_sel selecting drives 2-8 - phase D territory,
+// not backed yet).
 
-wire mdv_tx_empty = 1'b1;
-wire mdv_rx_ready = 1'b0;
-wire [7:0] mdv_byte = 8'h00;
+wire mdv_tx_empty = mdv_sel[0] ? mdv1_tx_empty_i : 1'b1;
+wire mdv_rx_ready = mdv_sel[0] ? mdv1_rx_ready_i : 1'b0;
+wire [7:0] mdv_byte = mdv_sel[0] ? mdv1_byte_i : 8'h00;
 
 assign led = mdv_sel[0];
+assign mdv_sel_o = mdv_sel;
 
 // the microdrive control register mctrl generates the drive selection
 reg [7:0] mdv_sel;
@@ -373,7 +393,10 @@ always @(posedge clk) begin
 	else
 		mdv_gap_r <= 1'b0;
 end
-wire mdv_gap = mdv_gap_r;
+// QL4M65 (Milestone 2 phase A): real mdv1 gap timing when drive 1 is
+// selected, the M1040 placeholder pulse otherwise (see its own comment
+// above - still needed for mdv_sel==0 and for drives 2-8, not backed yet).
+wire mdv_gap = mdv_sel[0] ? mdv1_gap_i : mdv_gap_r;
 
 // ---------------------------------------------------------------------------------
 // -------------------------------------- RTC --------------------------------------
