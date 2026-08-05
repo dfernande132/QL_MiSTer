@@ -74,7 +74,11 @@ module zx8302
 		input          mdv1_tx_empty_i,
 		input          mdv1_rx_ready_i,
 		input  [7:0]   mdv1_byte_i,
-		
+
+		// QL4M65 (Milestone 2 phase A, M2007): debug-only status output, see
+		// main.vhd's on-screen mdv1 status readout.
+		output         gap_irq_o,
+
 		// vertical synv 
 		input          vs,
 
@@ -296,6 +300,7 @@ end
 wire gap_irq_in = mdv_gap && irq_mask[0];
 reg gap_irq;
 wire gap_irq_reset = reset || irq_ack[0];
+assign gap_irq_o = gap_irq;
 always @(posedge clk) begin
 	reg old_irq;
 	

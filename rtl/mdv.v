@@ -40,8 +40,18 @@ module mdv
 	input        download,
 	input [16:0] dl_addr,
 	input [15:0] dl_data,
-	input        dl_wr
+	input        dl_wr,
+
+	// QL4M65 (Milestone 2 phase A, M2007): debug-only status outputs, see
+	// main.vhd's on-screen mdv1 status readout added to investigate a hang
+	// when QDOS tries to read a loaded microdrive (DIR mdv1_). Purely
+	// additive - no existing behaviour touched.
+	output       mdv_present_o,
+	output       mdv_loaded_o
 );
+
+assign mdv_present_o = mdv_present;
+assign mdv_loaded_o  = (mdv_end != 0);
 
 reg  [16:0] mem_addr;
 wire [15:0] mdv_din;
