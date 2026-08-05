@@ -49,18 +49,8 @@ module zx8301
    output reg hs,
    output reg vs,
 	output reg HBlank,
-	output reg VBlank,
-
-	// QL4M65 (Milestone 2 phase A, M2007): debug-overlay pixel position, see
-	// main.vhd's on-screen mdv1 status readout. Same pattern as the M1016
-	// cpu_addr debug overlay (removed once diagnosed back then) - see
-	// doc/m2m/exceptions.md.
-	output [9:0] h_cnt_o,
-	output [9:0] v_cnt_o
+	output reg VBlank
 );
-
-assign h_cnt_o = h_cnt;
-assign v_cnt_o = v_cnt;
 
 /* ----------------------------------------------------------------- */
 /* -------------------------- CPU register ------------------------- */
