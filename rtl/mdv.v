@@ -47,11 +47,13 @@ module mdv
 	// when QDOS tries to read a loaded microdrive (DIR mdv1_). Purely
 	// additive - no existing behaviour touched.
 	output       mdv_present_o,
-	output       mdv_loaded_o
+	output       mdv_loaded_o,
+	output [16:0] mem_addr_o
 );
 
 assign mdv_present_o = mdv_present;
 assign mdv_loaded_o  = (mdv_end != 0);
+assign mem_addr_o    = mem_addr;
 
 reg  [16:0] mem_addr;
 wire [15:0] mdv_din;
