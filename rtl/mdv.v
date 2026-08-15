@@ -239,14 +239,26 @@ reg         wr_do;       // pulso: hay una palabra que confirmar en este ciclo
 reg  [16:0] wr_addr;
 reg  [15:0] wr_word;
 
+// QL4M65 fase B (fix post-M2022): wr_strobe llega desde zx8302.v generado en
+// un bloque gateado por cen (~7.5MHz) - una vez a 1'b1, se queda retenido a
+// ritmo de clk COMPLETO (84MHz) hasta el siguiente tick de cen, no es un
+// pulso de 1 ciclo de clk. Este bloque muestrea a ritmo de clk (sin gatear
+// por ce, a diferencia del resto de la maquina de estados de lectura), asi
+// que sin deteccion de flanco aqui tambien, contaria cada byte real como
+// ~11 bytes (uno por cada ciclo de clk que wr_strobe se mantiene en alto) -
+// exactamente el riesgo R1 del diseno, colado un nivel mas adentro de lo
+// que protegia la deteccion de flanco de zx8302.v.
+reg wr_strobe_prev;
+
 always @(posedge clk) begin
 	wr_do <= 1'b0;
+	wr_strobe_prev <= wr_strobe;
 
 	if(!wr_session) begin
 		wr_byte_cnt <= 9'd0;      // cada sesion empieza de cero
 		wr_pending  <= 1'b0;
 	end
-	else if(wr_strobe) begin
+	else if(wr_strobe && !wr_strobe_prev) begin
 		wr_byte_cnt <= wr_byte_cnt + 9'd1;
 		if(!wr_pending) begin
 			wr_byte_hi <= wr_data;         // byte alto: el primero del par
