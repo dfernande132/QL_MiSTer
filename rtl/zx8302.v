@@ -75,6 +75,13 @@ module zx8302
 		input          mdv1_rx_ready_i,
 		input  [7:0]   mdv1_byte_i,
 
+		// QL4M65 fase B: canal de escritura del microdrive, hacia el mdv1
+		// sibling (main.vhd) - ver doc/m2m/exceptions.md.
+		output [7:0]   mdv_wr_data_o,   // byte escrito en pc_tdata ($18022)
+		output         mdv_wr_strobe_o, // 1 tick de cen por escritura (flanco, no nivel)
+		output         mdv_wr_en_o,     // mctrl[2]  pc..writ
+		output         mdv_er_en_o,     // mctrl[3]  pc..eras (solo observabilidad por ahora)
+
 		// vertical synv
 		input          vs,
 
@@ -119,6 +126,16 @@ reg prev_ipc_comctrl;
 
 reg [7:0] mctrl;
 
+// QL4M65 fase B: registro de transmision del microdrive, pc_tdata ($18022).
+// mdv_wr_sel se mantiene estable durante TODO un ciclo de bus del 68000,
+// que abarca varios ticks de cen con cpu_sel/cpu_wr constantes - sin
+// deteccion de flanco un solo move.b generaria varios pulsos y bytes
+// duplicados en el .mdv (ver microdrive-write-design.md S4.2, riesgo R1).
+reg [7:0] mdv_wr_data;
+reg       mdv_wr_pulse;
+reg       prev_mdv_wr_sel;
+wire      mdv_wr_sel = cpu_sel && cpu_wr && cpu_uds && (cpu_addr == 2'b11);
+
 
 // Handles:
 // 1. CPU is writing to registers
@@ -141,9 +158,12 @@ always @(posedge clk) begin
 		// DECISIONES.md for the full M1031/M1032/M1033 investigation.
 		comdata_reg <= 4'b1111;
 		ipc_busy <= 2'b11;
+		prev_mdv_wr_sel <= 1'b0;
+		mdv_wr_pulse <= 1'b0;
 	end
 	else if(cen) begin
 		irq_ack <= 5'd0;
+		mdv_wr_pulse <= 1'b0;
 
 
 		// cpu writes to 0x18XXX area
@@ -153,6 +173,16 @@ always @(posedge clk) begin
 				// cpu writes microdrive control register
 				if(cpu_addr == 2'b10)
 					mctrl <= cpu_din[15:8];
+
+				// QL4M65 fase B: pc_tdata ($18022) - registro de transmision
+				// del microdrive. !prev_mdv_wr_sel es la deteccion de
+				// flanco: solo el primer tick de cen de un ciclo de bus
+				// genera pulso, aunque cpu_sel/cpu_wr sigan estables varios
+				// ticks mas.
+				if(cpu_addr == 2'b11 && !prev_mdv_wr_sel) begin
+					mdv_wr_data  <= cpu_din[15:8];
+					mdv_wr_pulse <= 1'b1;
+				end
 			end
 
 			// odd addresses have lds asserted and use the lower 8 data bus bits
@@ -176,6 +206,7 @@ always @(posedge clk) begin
 				end
 			end
 		end
+		prev_mdv_wr_sel <= mdv_wr_sel;
 	end
 	if (!ipc_comctrl_i && prev_ipc_comctrl) begin
 		comdata_to_cpu <= zx8302_comdata_in;	// Latch COMDATA since the IPC will quickly reset it to 1 when sending data
@@ -338,6 +369,16 @@ wire [7:0] mdv_byte = mdv_sel[0] ? mdv1_byte_i : 8'h00;
 
 assign led = mdv_sel[0];
 assign mdv_sel_o = mdv_sel;
+
+// QL4M65 fase B: salidas de control de escritura hacia mdv1. Sin
+// condicionar aqui por mdv_sel[0] a proposito - mdv.v ya exige
+// wr_session = wr_en && mdv_present, y mdv_present ya exige su propio
+// puerto sel (cableado a mdv_sel_o[0] en main.vhd), asi que la unidad no
+// seleccionada nunca puede escribir aunque mctrl[2] este a 1.
+assign mdv_wr_en_o     = mctrl[2];   // pc..writ
+assign mdv_er_en_o     = mctrl[3];   // pc..eras
+assign mdv_wr_data_o   = mdv_wr_data;
+assign mdv_wr_strobe_o = mdv_wr_pulse;
 
 // the microdrive control register mctrl generates the drive selection
 reg [7:0] mdv_sel;

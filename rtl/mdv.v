@@ -40,19 +40,41 @@ module mdv
 	input        download,
 	input [16:0] dl_addr,
 	input [15:0] dl_data,
-	input        dl_wr
+	input        dl_wr,
+	output [15:0] dl_q,        // QL4M65 fase B: lectura del buffer para el volcado
+
+	// QL4M65 fase B: canal de escritura desde la CPU
+	input        wr_en,        // nivel: mctrl[2] (pc..writ) ya sincronizado al dominio del core
+	input        wr_strobe,    // pulso de 1 ciclo de clk por cada byte que la CPU escribe en $18022
+	input  [7:0] wr_data,      // el byte
+	output [7:0] sector,       // indice del sector bajo el cabezal, 0..254
+	output       wr_commit     // pulso de 1 ciclo de clk por cada PALABRA confirmada en la RAM
 );
 
 reg  [16:0] mem_addr;
+reg  [16:0] region_base;    // QL4M65 fase B: base de la region que se esta reproduciendo (D1)
+reg         region_state;   // copia de mdv_gap_state para la region que viene (0=cabecera, 1=datos)
+reg  [7:0]  mdv_sector;     // QL4M65 fase B: sector bajo el cabezal, 0..254
 wire [15:0] mdv_din;
+
+// QL4M65 fase B: puerto A de la RAM, compartido ahora por el cargador/
+// volcado de QNICE y por la confirmacion de escritura de la CPU. La
+// confirmacion tiene prioridad (D3, microdrive-write-design.md S3.5): en la
+// practica solo puede coincidir con un volcado, nunca con una carga (cargar
+// y reproducir son excluyentes), y ahi es preferible perder un ciclo de
+// volcado (QNICE reintenta, esta en espera) que un dato escrito por el QL.
+wire [16:0] pa_addr = wr_do ? wr_addr : dl_addr;
+wire [15:0] pa_data = wr_do ? wr_word : dl_data;
+wire        pa_wren = wr_do | dl_wr;
 
 dpram #(17, 88000) vram
 (
 	.wrclock(clk),
-	.wraddress(dl_addr),
-	.wren(dl_wr),
+	.wraddress(pa_addr),
+	.wren(pa_wren),
 	.byteena_a(2'b11),
-	.data(dl_data),
+	.data(pa_data),
+	.q_a(dl_q),
 
 	.rdclock(clk),
 	.rdaddress(mem_addr),
@@ -129,16 +151,28 @@ always @(posedge clk) begin
 				// reset counters when address is out of range
 				if(mem_addr > mdv_end) begin
 					mem_addr <= 0;
+					mdv_sector <= 8'd0;              // QL4M65 fase B: wrap de cinta
 
 					// assume we start at the end of a post-sector/pre-header gap
 					mdv_gap_cnt <= 10'd0;      // count bytes until gap
 					mdv_gap_state <= 1'b1;      // toggle header + data gap
 					mdv_gap_active <= 1'b1;     // gap atm
-					mdv_gap <= 1'b1; 
+					mdv_gap <= 1'b1;
 				end else begin
 					mdv_gap_cnt <= mdv_gap_cnt + 10'd1;
-								
+
 					if(mdv_gap_active) begin
+
+						// QL4M65 fase B (D1): mem_addr no avanza durante el
+						// hueco, asi que ya es la direccion de la primera
+						// palabra de la region entrante - capturarla aqui,
+						// continuamente mientras dure el hueco, deja
+						// region_base congelado y correcto en cuanto
+						// termine. region_state es el complemento de
+						// mdv_gap_state porque el toggle de abajo ocurre en
+						// este mismo evento (gap_cnt==34).
+						region_base  <= mem_addr;
+						region_state <= !mdv_gap_state;
 
 						// stop sending gap after 35 words = 70 bytes = 2800us
 						if(mdv_gap_cnt == 34) begin
@@ -160,6 +194,7 @@ always @(posedge clk) begin
 							mdv_gap_cnt <= 10'd0;            // restart counter for gap
 							mdv_gap_active <= 1'b1;          // now comes a gap
 							mdv_gap <= 1'b1;
+							mdv_sector <= mdv_sector + 8'd1; // QL4M65 fase B: siguiente sector
 
 							if(reverse) begin
 								// The sectors on cartridges are written in descending order
@@ -178,5 +213,56 @@ always @(posedge clk) begin
 		end
 	end
 end
+
+// ---------------------------------------------------------------------------------
+// QL4M65 fase B: acumulador de bytes de escritura y confirmacion en RAM.
+//
+// Espejo posicional de la lectura (microdrive-write-design.md S3.4): cada
+// palabra escrita se deposita en region_base + indice_de_palabra, sin
+// importar cuando llega respecto al recorrido de mem_addr. Sin control de
+// flujo (D2): tx_empty se queda en 1'b0 siempre, wr_in_range es la unica
+// proteccion necesaria para no desbordar al sector siguiente.
+// ---------------------------------------------------------------------------------
+
+assign sector = mdv_sector;
+
+wire        wr_session  = wr_en && mdv_present; // nunca escribir sin cartucho ni sin unidad seleccionada
+wire [8:0]  wr_word_idx = wr_byte_cnt[8:1];
+wire        wr_in_range = region_state
+                        ? (wr_word_idx < 9'd329)  // region de datos
+                        : (wr_word_idx < 9'd14);  // region de cabecera (solo FORMAT, no usado en el MVP)
+
+reg  [8:0]  wr_byte_cnt; // 0..537 en una sesion completa; 9 bits sobran
+reg  [7:0]  wr_byte_hi;  // primer byte del par (el alto, ver mdv.v:110 - dout sirve mdv_data[15:8] primero)
+reg         wr_pending;  // hay medio par acumulado
+reg         wr_do;       // pulso: hay una palabra que confirmar en este ciclo
+reg  [16:0] wr_addr;
+reg  [15:0] wr_word;
+
+always @(posedge clk) begin
+	wr_do <= 1'b0;
+
+	if(!wr_session) begin
+		wr_byte_cnt <= 9'd0;      // cada sesion empieza de cero
+		wr_pending  <= 1'b0;
+	end
+	else if(wr_strobe) begin
+		wr_byte_cnt <= wr_byte_cnt + 9'd1;
+		if(!wr_pending) begin
+			wr_byte_hi <= wr_data;         // byte alto: el primero del par
+			wr_pending <= 1'b1;
+		end
+		else begin
+			wr_pending <= 1'b0;
+			if(wr_in_range) begin
+				wr_addr <= region_base + {8'd0, wr_word_idx};
+				wr_word <= {wr_byte_hi, wr_data};
+				wr_do   <= 1'b1;
+			end
+		end
+	end
+end
+
+assign wr_commit = wr_do;
 
 endmodule
