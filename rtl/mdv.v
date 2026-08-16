@@ -227,12 +227,19 @@ end
 assign sector = mdv_sector;
 
 wire        wr_session  = wr_en && mdv_present; // nunca escribir sin cartucho ni sin unidad seleccionada
-wire [8:0]  wr_word_idx = wr_byte_cnt[8:1];
+wire [9:0]  wr_word_idx = wr_byte_cnt[9:1];
 wire        wr_in_range = region_state
-                        ? (wr_word_idx < 9'd329)  // region de datos
-                        : (wr_word_idx < 9'd14);  // region de cabecera (solo FORMAT, no usado en el MVP)
+                        ? (wr_word_idx < 10'd329)  // region de datos
+                        : (wr_word_idx < 10'd14);  // region de cabecera (solo FORMAT, no usado en el MVP)
 
-reg  [8:0]  wr_byte_cnt; // 0..537 en una sesion completa; 9 bits sobran
+// QL4M65 fase B (fix post-M2023, analisis externo microdrive-write-bug-analysis.md):
+// una sesion md_write son 538 bytes (0..537); 9 bits solo llegan a 511 y
+// desbordaban a mitad de la sesion, reescribiendo las primeras 13 palabras
+// de la region (preambulo/cabecera/checksum incluidos) con la cola del
+// bloque de datos - y wr_in_range, con el mismo desborde, nunca protegia
+// nada. El comentario original ("9 bits sobran") era del documento de
+// diseno, copiado fielmente aqui; era matematicamente falso (2^9=512<538).
+reg  [9:0]  wr_byte_cnt; // 0..537 en una sesion completa; hacen falta 10 bits
 reg  [7:0]  wr_byte_hi;  // primer byte del par (el alto, ver mdv.v:110 - dout sirve mdv_data[15:8] primero)
 reg         wr_pending;  // hay medio par acumulado
 reg         wr_do;       // pulso: hay una palabra que confirmar en este ciclo
@@ -255,11 +262,11 @@ always @(posedge clk) begin
 	wr_strobe_prev <= wr_strobe;
 
 	if(!wr_session) begin
-		wr_byte_cnt <= 9'd0;      // cada sesion empieza de cero
+		wr_byte_cnt <= 10'd0;      // cada sesion empieza de cero
 		wr_pending  <= 1'b0;
 	end
 	else if(wr_strobe && !wr_strobe_prev) begin
-		wr_byte_cnt <= wr_byte_cnt + 9'd1;
+		wr_byte_cnt <= wr_byte_cnt + 10'd1;
 		if(!wr_pending) begin
 			wr_byte_hi <= wr_data;         // byte alto: el primero del par
 			wr_pending <= 1'b1;
@@ -267,7 +274,7 @@ always @(posedge clk) begin
 		else begin
 			wr_pending <= 1'b0;
 			if(wr_in_range) begin
-				wr_addr <= region_base + {8'd0, wr_word_idx};
+				wr_addr <= region_base + {7'd0, wr_word_idx};
 				wr_word <= {wr_byte_hi, wr_data};
 				wr_do   <= 1'b1;
 			end
