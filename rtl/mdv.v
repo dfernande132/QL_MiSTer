@@ -48,7 +48,27 @@ module mdv
 	input        wr_strobe,    // pulso de 1 ciclo de clk por cada byte que la CPU escribe en $18022
 	input  [7:0] wr_data,      // el byte
 	output [7:0] sector,       // indice del sector bajo el cabezal, 0..254
-	output       wr_commit     // pulso de 1 ciclo de clk por cada PALABRA confirmada en la RAM
+	output       wr_commit,    // pulso de 1 ciclo de clk por cada PALABRA confirmada en la RAM
+
+	// QL4M65 fase C (migracion de buffer a HyperRAM): paso puro hacia la
+	// propia instancia dpram de este modulo (linea 70) - mdv.v no lee ni
+	// escribe estas senales en ningun otro sitio, es cableado mecanico,
+	// sin cambio de comportamiento. dpram's own implementation (BRAM hoy,
+	// backend HyperRAM manana) es la unica pieza que las usa de verdad -
+	// existen porque dpram no tiene otra forma de alcanzar un maestro
+	// Avalon-MM externo (ver puntos de diseño de la migracion en
+	// DECISIONES.md). Mismo patron "solo puertos de paso, cero cambio de
+	// logica" ya usado en zx8302.v para los puertos mdv_wr_*/mdv_er_en_o
+	// (M2022) - ver doc/m2m/exceptions.md.
+	output        m_avm_write,
+	output        m_avm_read,
+	output [31:0] m_avm_address,
+	output [15:0] m_avm_writedata,
+	output [1:0]  m_avm_byteenable,
+	output [7:0]  m_avm_burstcount,
+	input  [15:0] m_avm_readdata,
+	input         m_avm_readdatavalid,
+	input         m_avm_waitrequest
 );
 
 reg  [16:0] mem_addr;
@@ -78,7 +98,17 @@ dpram #(17, 88000) vram
 
 	.rdclock(clk),
 	.rdaddress(mem_addr),
-	.q(mdv_din)
+	.q(mdv_din),
+
+	.m_avm_write_o(m_avm_write),
+	.m_avm_read_o(m_avm_read),
+	.m_avm_address_o(m_avm_address),
+	.m_avm_writedata_o(m_avm_writedata),
+	.m_avm_byteenable_o(m_avm_byteenable),
+	.m_avm_burstcount_o(m_avm_burstcount),
+	.m_avm_readdata_i(m_avm_readdata),
+	.m_avm_readdatavalid_i(m_avm_readdatavalid),
+	.m_avm_waitrequest_i(m_avm_waitrequest)
 );
 
 // a gap is permanently present if no mdv is inserted or if
