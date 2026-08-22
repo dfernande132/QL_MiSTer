@@ -43,6 +43,12 @@ module mdv
 	input        dl_wr,
 	output [15:0] dl_q,        // QL4M65 fase B: lectura del buffer para el volcado
 
+	// QL4M65 M2030 (encontrado en hardware real): paso puro del pulso de
+	// "dl_q ya tiene un valor fresco" de dpram (linea 70) - main.vhd's
+	// mdv1_reader_core lo espera en vez de un numero fijo de ciclos, ver
+	// dpram_avm.vhd/mdv_dpram.vhd (CORE/vhdl) para el porque.
+	output       dl_q_valid,
+
 	// QL4M65 fase B: canal de escritura desde la CPU
 	input        wr_en,        // nivel: mctrl[2] (pc..writ) ya sincronizado al dominio del core
 	input        wr_strobe,    // pulso de 1 ciclo de clk por cada byte que la CPU escribe en $18022
@@ -95,6 +101,7 @@ dpram #(17, 88000) vram
 	.byteena_a(2'b11),
 	.data(pa_data),
 	.q_a(dl_q),
+	.q_a_valid_o(dl_q_valid),
 
 	.rdclock(clk),
 	.rdaddress(mem_addr),
