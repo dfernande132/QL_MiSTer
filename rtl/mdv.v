@@ -77,6 +77,16 @@ module mdv
 	input         m_avm_waitrequest
 );
 
+// QL4M65 Milestone 2 paso 5, etapa 1 (2026-08-23,
+// .research/microdrive-second-unit-plan.md): which 4kW-block window of
+// HyperRAM this instance's own dpram lives at - passed straight through
+// to the internal "dpram" instantiation below (mechanical, mdv.v never
+// reads this itself), same "paso puro" pattern as m_avm_* above. main.vhd
+// overrides this explicitly for both siblings (C_HMAP_MDV1 for i_mdv1,
+// C_HMAP_MDV2 for i_mdv2) - the default here only matters if some future
+// instantiation forgets to.
+parameter [15:0] HMAP_BASE = 16'h0200;
+
 reg  [16:0] mem_addr;
 reg  [16:0] region_base;    // QL4M65 fase B: base de la region que se esta reproduciendo (D1)
 reg         region_state;   // copia de mdv_gap_state para la region que viene (0=cabecera, 1=datos)
@@ -93,7 +103,7 @@ wire [16:0] pa_addr = wr_do ? wr_addr : dl_addr;
 wire [15:0] pa_data = wr_do ? wr_word : dl_data;
 wire        pa_wren = wr_do | dl_wr;
 
-dpram #(17, 88000) vram
+dpram #(.ADDRWIDTH(17), .NUMWORDS(88000), .G_HMAP_BASE(HMAP_BASE)) vram
 (
 	.wrclock(clk),
 	.wraddress(pa_addr),

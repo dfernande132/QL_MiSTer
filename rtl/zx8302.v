@@ -75,6 +75,15 @@ module zx8302
 		input          mdv1_rx_ready_i,
 		input  [7:0]   mdv1_byte_i,
 
+		// QL4M65 Milestone 2 paso 5, etapa 1 (2026-08-23): second real
+		// sibling, same pattern as mdv1_*_i above - muxed in whenever
+		// mdv_sel[1] is set (.research/microdrive-second-unit-plan.md
+		// section 1.3).
+		input          mdv2_gap_i,
+		input          mdv2_tx_empty_i,
+		input          mdv2_rx_ready_i,
+		input  [7:0]   mdv2_byte_i,
+
 		// QL4M65 fase B: canal de escritura del microdrive, hacia el mdv1
 		// sibling (main.vhd) - ver doc/m2m/exceptions.md.
 		output [7:0]   mdv_wr_data_o,   // byte escrito en pc_tdata ($18022)
@@ -356,18 +365,22 @@ end
 // (microdrive wasn't implemented yet at the time) since mdv.v itself
 // instantiates "dpram" (the Quartus-specific altsyncram wrapper - see
 // doc/m2m/exceptions.md), which would otherwise get pulled into the Vivado
-// build transitively even when unused. Now that a real mdv1 sibling exists
-// (main.vhd, with a Vivado-clean dpram replacement), mdv_tx_empty/
-// mdv_rx_ready/mdv_byte are muxed: mdv1's real outputs when mdv_sel[0] is
-// set (drive 1 selected), the original "no drive present" placeholder
-// otherwise (mdv_sel==0, or mdv_sel selecting drives 2-8 - phase D territory,
-// not backed yet).
+// build transitively even when unused. Now that real mdv1/mdv2 siblings
+// exist (main.vhd, with a Vivado-clean dpram replacement), mdv_tx_empty/
+// mdv_rx_ready/mdv_byte/mdv_gap are muxed: whichever drive's real outputs
+// when its own mdv_sel bit is set, the original "no drive present"
+// placeholder otherwise (mdv_sel==0, or mdv_sel selecting drives 3-8 -
+// not backed yet, .research/microdrive-second-unit-plan.md).
 
-wire mdv_tx_empty = mdv_sel[0] ? mdv1_tx_empty_i : 1'b1;
-wire mdv_rx_ready = mdv_sel[0] ? mdv1_rx_ready_i : 1'b0;
-wire [7:0] mdv_byte = mdv_sel[0] ? mdv1_byte_i : 8'h00;
+wire mdv_tx_empty = mdv_sel[0] ? mdv1_tx_empty_i : mdv_sel[1] ? mdv2_tx_empty_i : 1'b1;
+wire mdv_rx_ready = mdv_sel[0] ? mdv1_rx_ready_i : mdv_sel[1] ? mdv2_rx_ready_i : 1'b0;
+wire [7:0] mdv_byte = mdv_sel[0] ? mdv1_byte_i : mdv_sel[1] ? mdv2_byte_i : 8'h00;
 
-assign led = mdv_sel[0];
+// QL4M65 Milestone 2 paso 5: lit whenever ANY real drive is selected, not
+// just drive 1 - the QL's own hardware only ever selects one drive at a
+// time (mdv_sel is a one-hot shift register in normal operation), so a
+// plain OR is exact, not just an approximation.
+assign led = |mdv_sel[1:0];
 assign mdv_sel_o = mdv_sel;
 
 // QL4M65 fase B: salidas de control de escritura hacia mdv1. Sin
@@ -434,10 +447,11 @@ always @(posedge clk) begin
 	else
 		mdv_gap_r <= 1'b0;
 end
-// QL4M65 (Milestone 2 phase A): real mdv1 gap timing when drive 1 is
-// selected, the M1040 placeholder pulse otherwise (see its own comment
-// above - still needed for mdv_sel==0 and for drives 2-8, not backed yet).
-wire mdv_gap = mdv_sel[0] ? mdv1_gap_i : mdv_gap_r;
+// QL4M65 (Milestone 2 phase A/paso 5): real gap timing from whichever
+// drive is selected, the M1040 placeholder pulse otherwise (see its own
+// comment above - still needed for mdv_sel==0 and for drives 3-8, not
+// backed yet).
+wire mdv_gap = mdv_sel[0] ? mdv1_gap_i : mdv_sel[1] ? mdv2_gap_i : mdv_gap_r;
 
 // ---------------------------------------------------------------------------------
 // -------------------------------------- RTC --------------------------------------
